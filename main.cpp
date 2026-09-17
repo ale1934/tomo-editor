@@ -1,9 +1,10 @@
 #define PADDING 32
-#define FONT_SIZE 32
+#define FONT_SIZE 24
 #define FONT_SPACING 2
 #define STATUS_BAR_HEIGHT 50
 #define TAB_SPACING 4
 
+#include "highlight.h"
 #include <filesystem>
 #include <fstream>
 #include <raylib.h>
@@ -16,6 +17,14 @@ struct Vector2i {
   int x;
   int y;
 };
+
+enum Mode { EDIT, SEARCH };
+
+string statusMessage = "";
+Color statusColor = WHITE;
+double statusMessageTime = -1.0;
+
+const double STATUS_MESSAGE_DURATION = 1.0;
 
 string FileInput(string inputText, Font mainFont) {
   string filename = "";
@@ -36,13 +45,15 @@ string FileInput(string inputText, Font mainFont) {
 
     // Draw bottom status bar
     DrawRectangle(0, GetScreenHeight() - STATUS_BAR_HEIGHT, GetScreenWidth(),
-                  STATUS_BAR_HEIGHT, GetColor(0x222222ff));
+                  STATUS_BAR_HEIGHT, BLACK);
+    DrawRectangleLines(0, GetScreenHeight() - STATUS_BAR_HEIGHT,
+                       GetScreenWidth(), STATUS_BAR_HEIGHT, WHITE);
 
     string infoText = inputText + ": " + filename;
     DrawTextEx(
         mainFont, infoText.c_str(),
         {PADDING / 2, (float)GetScreenHeight() - STATUS_BAR_HEIGHT / 2 - 15},
-        FONT_SIZE, FONT_SPACING, GREEN);
+        FONT_SIZE, FONT_SPACING, BLUE);
 
     EndDrawing();
   }
@@ -50,38 +61,16 @@ string FileInput(string inputText, Font mainFont) {
   return filename;
 }
 
-void DisplayError(string err, Font mainFont) {
-  while (GetKeyPressed() != KEY_ENTER) {
-    BeginDrawing();
-
-    // Draw bottom status bar
-    DrawRectangle(0, GetScreenHeight() - STATUS_BAR_HEIGHT, GetScreenWidth(),
-                  STATUS_BAR_HEIGHT, GetColor(0x222222ff));
-
-    DrawTextEx(
-        mainFont, err.c_str(),
-        {PADDING / 2, (float)GetScreenHeight() - STATUS_BAR_HEIGHT / 2 - 15},
-        FONT_SIZE, FONT_SPACING, RED);
-
-    EndDrawing();
-  }
+void DisplayError(string err) {
+  statusMessage = err;
+  statusColor = RED;
+  statusMessageTime = GetTime();
 }
 
-void DisplayInfo(string msg, Font mainFont) {
-  while (GetKeyPressed() != KEY_ENTER) {
-    BeginDrawing();
-
-    // Draw bottom status bar
-    DrawRectangle(0, GetScreenHeight() - STATUS_BAR_HEIGHT, GetScreenWidth(),
-                  STATUS_BAR_HEIGHT, GetColor(0x222222ff));
-
-    DrawTextEx(
-        mainFont, msg.c_str(),
-        {PADDING / 2, (float)GetScreenHeight() - STATUS_BAR_HEIGHT / 2 - 15},
-        FONT_SIZE, FONT_SPACING, BLUE);
-
-    EndDrawing();
-  }
+void DisplayInfo(string msg) {
+  statusMessage = msg;
+  statusColor = BLUE;
+  statusMessageTime = GetTime();
 }
 
 // Gets occurances of searched string in document
@@ -140,12 +129,15 @@ void SaveFile(const vector<string> &document, const string &filename) {
 int main(int argc, char *argv[]) {
   SetConfigFlags(FLAG_FULLSCREEN_MODE);
   InitWindow(GetScreenWidth(), GetScreenHeight(), "Tap");
+  SetExitKey(KEY_NULL);
 
   // Load custom font
-  Font mainFont = LoadFontEx("resources/Roboto/static/Roboto-Regular.ttf",
-                             FONT_SIZE, 0, 250);
+  Font mainFont =
+      LoadFontEx("resources/CascadiaMono/CaskaydiaMonoNerdFontMono-Regular.ttf",
+                 FONT_SIZE, 0, 250);
 
   vector<string> document;
+  vector<Vector2i> occurances;
   document.push_back("");
 
   float textHue = 0.0f;
@@ -158,23 +150,37 @@ int main(int argc, char *argv[]) {
   const double SCROLL_DELAY = 0.2;
   const double SCROLL_INTERVAL = 0.05;
   int lastKey = -1;
-  vector<Vector2i> occurances;
-  bool searchMode = false;
   int searchIndex = 0;
+  int lastCurLine = curLine;
+
+  Mode currentMode = EDIT;
 
   int maxVisibleLines =
-      (GetScreenHeight() - PADDING - STATUS_BAR_HEIGHT) / FONT_SIZE;
+      (GetScreenHeight() - (PADDING / 2) - STATUS_BAR_HEIGHT) / FONT_SIZE;
+
+  // keeps the view inside the document no matter who moved it
+  auto ClampScroll = [&]() {
+    int maxScroll = (int)document.size() - maxVisibleLines;
+    if (maxScroll < 0)
+      maxScroll = 0;
+    if (scrollOffset > maxScroll)
+      scrollOffset = maxScroll;
+    if (scrollOffset < 0)
+      scrollOffset = 0;
+  };
 
   double savedTime = -1.0;
   const double SAVED_FLASH_DURATION = 1.0;
 
   string currentFile = "untitled.txt";
+  string currentSearch = "";
 
   if (argc >= 2) {
     currentFile = argv[1];
   }
 
   LoadFile(document, currentFile, mainFont);
+  Syntax syntax = SyntaxForFile(currentFile);
 
   while (!WindowShouldClose()) {
 
@@ -187,11 +193,11 @@ int main(int argc, char *argv[]) {
                                 document[curLine].substr(0, curLetter).c_str(),
                                 FONT_SIZE, FONT_SPACING)
                       .x;
-    int cursorY = PADDING + FONT_SIZE * (curLine - scrollOffset);
+    int cursorY = PADDING / 2 + FONT_SIZE * (curLine - scrollOffset);
 
     curChar = GetCharPressed();
 
-    if (curChar >= 32 && curChar <= 127 && !searchMode) {
+    if (curChar >= 32 && curChar <= 127 && currentMode == EDIT) {
       document[curLine].insert(curLetter, 1, curChar);
       curLetter++;
     }
@@ -215,6 +221,32 @@ int main(int argc, char *argv[]) {
       keyPressed = KEY_BACKSPACE;
 
     double currentTime = GetTime();
+
+    const int SCROLL_LINES = 3;
+
+    float wheel = GetMouseWheelMove();
+    if (wheel != 0.0f) {
+      scrollOffset -= (int)(wheel * SCROLL_LINES);
+      ClampScroll();
+    }
+
+    if (IsKeyPressed(KEY_PAGE_DOWN)) {
+      scrollOffset += maxVisibleLines;
+      curLine += maxVisibleLines;
+      if (curLine > (int)document.size() - 1)
+        curLine = document.size() - 1;
+      curLetter = 0;
+      ClampScroll();
+    }
+
+    if (IsKeyPressed(KEY_PAGE_UP)) {
+      scrollOffset -= maxVisibleLines;
+      curLine -= maxVisibleLines;
+      if (curLine < 0)
+        curLine = 0;
+      curLetter = 0;
+      ClampScroll();
+    }
 
     if (keyPressed != -1) {
       if (keyPressed != lastKey) {
@@ -307,30 +339,37 @@ int main(int argc, char *argv[]) {
 
     // Search for string
     if ((IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_F))) {
-      occurances = searchForString(
-          document, FileInput("Enter String", mainFont), mainFont);
+      currentSearch = FileInput("Enter String", mainFont);
+      occurances = searchForString(document, currentSearch, mainFont);
       if (!occurances.empty()) {
-        searchMode = true;
+        currentMode = SEARCH;
         searchIndex = 0;
         curLine = occurances[searchIndex].y;
         curLetter = occurances[searchIndex].x;
         if (curLine >= scrollOffset + maxVisibleLines)
           scrollOffset = curLine - maxVisibleLines + 1;
       } else {
-        DisplayInfo("No Matches Found!", mainFont);
+        DisplayInfo("No Matches Found!");
       }
     }
 
-    // Go to next occurance if in search mode
-    if (searchMode && (IsKeyPressed(KEY_N))) {
+    // Go to next occurrence if in search mode
+    if (currentMode == SEARCH && IsKeyPressed(KEY_N)) {
       if (searchIndex + 1 < occurances.size()) {
         searchIndex++;
-        curLine = occurances[searchIndex].y;
-        curLetter = occurances[searchIndex].x;
-        if (curLine >= scrollOffset + maxVisibleLines)
-          scrollOffset = curLine - maxVisibleLines + 1;
       } else {
+        // Wrap back to first occurrence
         searchIndex = 0;
+      }
+
+      curLine = occurances[searchIndex].y;
+      curLetter = occurances[searchIndex].x;
+
+      // Make sure the occurrence is visible
+      if (curLine < scrollOffset) {
+        scrollOffset = curLine;
+      } else if (curLine >= scrollOffset + maxVisibleLines) {
+        scrollOffset = curLine - maxVisibleLines + 1;
       }
     }
 
@@ -340,13 +379,17 @@ int main(int argc, char *argv[]) {
 
       if (!filesystem::remove(old_file)) {
         string errorMsg = "Cannot Remove: " + old_file.generic_string() + "!";
-        DisplayError(errorMsg, mainFont);
+        DisplayError(errorMsg);
+        currentFile = old_file;
       }
+
+      syntax = SyntaxForFile(currentFile);
     }
 
     if (IsKeyPressed(KEY_F3)) {
       string filename = FileInput("Open File", mainFont);
       LoadFile(document, filename, mainFont);
+      syntax = SyntaxForFile(currentFile);
       curLetter = 0;
       curLine = 0;
       scrollOffset = 0;
@@ -354,11 +397,25 @@ int main(int argc, char *argv[]) {
     }
 
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_J)) {
-      int lineNum =
-          TextToInteger(FileInput("Line Number", mainFont).c_str()) - 1;
-      scrollOffset += (lineNum - curLine);
-      curLine = lineNum;
-      curLetter = 0;
+      string input = FileInput("Line Number", mainFont);
+      if (!input.empty()) {
+        int lineNum = TextToInteger(input.c_str()) - 1;
+
+        if (lineNum < 0)
+          lineNum = 0;
+        if (lineNum > (int)document.size() - 1)
+          lineNum = document.size() - 1;
+
+        curLine = lineNum;
+        curLetter = 0;
+
+        // centre the target line, then clamp to the document
+        scrollOffset = curLine - maxVisibleLines / 2;
+        if (scrollOffset > (int)document.size() - maxVisibleLines)
+          scrollOffset = document.size() - maxVisibleLines;
+        if (scrollOffset < 0)
+          scrollOffset = 0;
+      }
     }
 
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_U)) {
@@ -366,53 +423,140 @@ int main(int argc, char *argv[]) {
       curLetter = 0;
     }
 
-    if (IsKeyPressed(KEY_ESCAPE) && searchMode) {
-      searchMode = false;
+    if (IsKeyPressed(KEY_ESCAPE) && currentMode == SEARCH) {
+      currentMode = EDIT;
+      currentSearch = "";
     }
 
     // cout << "Current Letter: " << curLetter << endl;
     // cout << "Current Line: " << curLine << endl;
 
+    if (curLine != lastCurLine) {
+      if (curLine < scrollOffset)
+        scrollOffset = curLine;
+      if (curLine >= scrollOffset + maxVisibleLines)
+        scrollOffset = curLine - maxVisibleLines + 1;
+      ClampScroll();
+    }
+    lastCurLine = curLine;
+
     BeginDrawing();
     ClearBackground(BLACK);
 
-    if (cursorVisible) {
+    if (cursorVisible && curLine >= scrollOffset &&
+        curLine < scrollOffset + maxVisibleLines) {
       DrawRectangle(cursorX + 1 + PADDING, cursorY, 3, FONT_SIZE, PINK);
     }
+
+    // Draw Line Numbers and Text
+    int lineNumberWidth = to_string(document.size()).length();
+
+    bool inBlock = BlockStateAtLine(document, syntax, scrollOffset);
+    vector<Token> tokens;
 
     for (int i = 0; i < maxVisibleLines; i++) {
       int lineIndex = scrollOffset + i;
       if (lineIndex >= document.size())
         break;
 
-      Vector2 textPos = {PADDING * 2, (float)PADDING + FONT_SIZE * i};
-      DrawTextEx(mainFont, document[lineIndex].c_str(), textPos, FONT_SIZE,
-                 FONT_SPACING, RAYWHITE);
-      DrawTextEx(mainFont, to_string(lineIndex + 1).c_str(),
-                 {PADDING / 8, (float)FONT_SIZE * i + PADDING}, FONT_SIZE,
+      Vector2 textPos = {PADDING * 2, (float)PADDING / 2 + FONT_SIZE * i};
+      inBlock = TokenizeLine(document[lineIndex], syntax, inBlock, tokens);
+      DrawHighlightedLine(mainFont, document[lineIndex], textPos, FONT_SIZE,
+                          FONT_SPACING, tokens);
+
+      string lineNumber = to_string(lineIndex + 1);
+
+      lineNumber =
+          string(lineNumberWidth - lineNumber.length(), ' ') + lineNumber;
+
+      DrawTextEx(mainFont, lineNumber.c_str(),
+                 {PADDING / 8, (float)FONT_SIZE * i + PADDING / 2}, FONT_SIZE,
                  FONT_SPACING, LIGHTGRAY);
     }
 
+    // Draw Highlighted Searches
+    if (currentMode == SEARCH) {
+      for (int i = 0; i < occurances.size(); i++) {
+        if (occurances[i].y < scrollOffset ||
+            occurances[i].y >= scrollOffset + maxVisibleLines)
+          continue;
+        float x =
+            PADDING * 2 +
+            MeasureTextEx(
+                mainFont,
+                document[occurances[i].y].substr(0, occurances[i].x).c_str(),
+                FONT_SIZE, FONT_SPACING)
+                .x;
+
+        float y = PADDING / 2 + FONT_SIZE * (occurances[i].y - scrollOffset);
+        Vector2 dimensions =
+            MeasureTextEx(mainFont,
+                          document[occurances[i].y]
+                              .substr(occurances[i].x, currentSearch.size())
+                              .c_str(),
+                          FONT_SIZE, FONT_SPACING);
+
+        if (i == searchIndex) {
+          DrawRectangleRounded({x, y, dimensions.x + 5, dimensions.y}, 0.5f, 10,
+                               GetColor(0xffffff80));
+        } else {
+          DrawRectangleRounded({x, y, dimensions.x + 5, dimensions.y}, 0.5f, 10,
+                               GetColor(0xffffff20));
+        }
+      }
+    }
+
+    // Draw bottom status bar
+    DrawRectangle(0, GetScreenHeight() - STATUS_BAR_HEIGHT, GetScreenWidth(),
+                  STATUS_BAR_HEIGHT, BLACK);
+    DrawRectangleLines(0, GetScreenHeight() - STATUS_BAR_HEIGHT,
+                       GetScreenWidth(), STATUS_BAR_HEIGHT, WHITE);
+
     string infoText = "";
-    if (savedTime > 0 && GetTime() - savedTime < SAVED_FLASH_DURATION) {
-      DrawRectangle(0, GetScreenHeight() - STATUS_BAR_HEIGHT, GetScreenWidth(),
-                    STATUS_BAR_HEIGHT, GetColor(0x222222ff));
+    Color infoColor = Color{198, 120, 221, 255};
+
+    string statusText = "";
+    Color statusColor = BLACK;
+
+    switch (currentMode) {
+    case EDIT:
+      statusText = "Edit Mode";
+      statusColor = BLUE;
+      break;
+    case SEARCH:
+      statusText = "Search Mode";
+      statusColor = PINK;
+      break;
+    }
+
+    if (statusMessageTime > 0 &&
+        GetTime() - statusMessageTime < STATUS_MESSAGE_DURATION) {
+
+      infoText = statusMessage;
+      infoColor = statusColor;
+
+    } else if (savedTime > 0 && GetTime() - savedTime < SAVED_FLASH_DURATION) {
+
       infoText = currentFile + " Saved!";
-      DrawTextEx(
-          mainFont, infoText.c_str(),
-          {PADDING / 2, (float)GetScreenHeight() - STATUS_BAR_HEIGHT / 2 - 15},
-          FONT_SIZE, FONT_SPACING, GREEN);
+
     } else {
-      // Draw bottom status bar
-      DrawRectangle(0, GetScreenHeight() - STATUS_BAR_HEIGHT, GetScreenWidth(),
-                    STATUS_BAR_HEIGHT, GetColor(0x222222ff));
 
       infoText = "Current File: " + currentFile;
-      DrawTextEx(
-          mainFont, infoText.c_str(),
-          {PADDING / 2, (float)GetScreenHeight() - STATUS_BAR_HEIGHT / 2 - 15},
-          FONT_SIZE, FONT_SPACING, GREEN);
     }
+
+    DrawTextEx(mainFont, infoText.c_str(),
+               {PADDING / 2.0f,
+                (float)GetScreenHeight() - STATUS_BAR_HEIGHT / 2.0f - 15},
+               FONT_SIZE, FONT_SPACING, infoColor);
+
+    DrawTextEx(mainFont, statusText.c_str(),
+               {GetScreenWidth() - PADDING / 2.0f -
+                    MeasureTextEx(mainFont, statusText.c_str(), FONT_SIZE,
+                                  FONT_SPACING)
+                        .x,
+                (float)GetScreenHeight() - STATUS_BAR_HEIGHT / 2.0f - 15},
+               FONT_SIZE, FONT_SPACING, statusColor);
+
     EndDrawing();
   }
 
