@@ -1,7 +1,8 @@
 #define PADDING 32
-#define FONT_SIZE 24
+#define FONT_SIZE 32
 #define FONT_SPACING 2
 #define STATUS_BAR_HEIGHT 50
+#define CHAT_BAR_HEIGHT 50
 #define TAB_SPACING 4
 
 #include "highlight.h"
@@ -152,11 +153,13 @@ int main(int argc, char *argv[]) {
   int lastKey = -1;
   int searchIndex = 0;
   int lastCurLine = curLine;
+  int numOfNotifs = 0;
 
   Mode currentMode = EDIT;
 
-  int maxVisibleLines =
-      (GetScreenHeight() - (PADDING / 2) - STATUS_BAR_HEIGHT) / FONT_SIZE;
+  int maxVisibleLines = (GetScreenHeight() - (PADDING / 2) - STATUS_BAR_HEIGHT -
+                         CHAT_BAR_HEIGHT) /
+                        FONT_SIZE;
 
   // keeps the view inside the document no matter who moved it
   auto ClampScroll = [&]() {
@@ -193,7 +196,8 @@ int main(int argc, char *argv[]) {
                                 document[curLine].substr(0, curLetter).c_str(),
                                 FONT_SIZE, FONT_SPACING)
                       .x;
-    int cursorY = PADDING / 2 + FONT_SIZE * (curLine - scrollOffset);
+    int cursorY =
+        PADDING / 2 + FONT_SIZE * (curLine - scrollOffset) + CHAT_BAR_HEIGHT;
 
     curChar = GetCharPressed();
 
@@ -459,7 +463,8 @@ int main(int argc, char *argv[]) {
       if (lineIndex >= document.size())
         break;
 
-      Vector2 textPos = {PADDING * 2, (float)PADDING / 2 + FONT_SIZE * i};
+      Vector2 textPos = {PADDING * 2,
+                         (float)PADDING / 2 + FONT_SIZE * i + CHAT_BAR_HEIGHT};
       inBlock = TokenizeLine(document[lineIndex], syntax, inBlock, tokens);
       DrawHighlightedLine(mainFont, document[lineIndex], textPos, FONT_SIZE,
                           FONT_SPACING, tokens);
@@ -469,9 +474,10 @@ int main(int argc, char *argv[]) {
       lineNumber =
           string(lineNumberWidth - lineNumber.length(), ' ') + lineNumber;
 
-      DrawTextEx(mainFont, lineNumber.c_str(),
-                 {PADDING / 8, (float)FONT_SIZE * i + PADDING / 2}, FONT_SIZE,
-                 FONT_SPACING, LIGHTGRAY);
+      DrawTextEx(
+          mainFont, lineNumber.c_str(),
+          {PADDING / 8, (float)FONT_SIZE * i + PADDING / 2 + CHAT_BAR_HEIGHT},
+          FONT_SIZE, FONT_SPACING, LIGHTGRAY);
     }
 
     // Draw Highlighted Searches
@@ -511,6 +517,10 @@ int main(int argc, char *argv[]) {
                   STATUS_BAR_HEIGHT, BLACK);
     DrawRectangleLines(0, GetScreenHeight() - STATUS_BAR_HEIGHT,
                        GetScreenWidth(), STATUS_BAR_HEIGHT, WHITE);
+
+    // Draw top chat bar
+    DrawRectangle(0, 0, GetScreenWidth(), CHAT_BAR_HEIGHT, BLACK);
+    DrawRectangleLines(0, 0, GetScreenWidth(), CHAT_BAR_HEIGHT, WHITE);
 
     string infoText = "";
     Color infoColor = Color{198, 120, 221, 255};
