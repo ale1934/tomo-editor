@@ -522,6 +522,9 @@ int main(int argc, char *argv[]) {
     DrawRectangle(0, 0, GetScreenWidth(), CHAT_BAR_HEIGHT, BLACK);
     DrawRectangleLines(0, 0, GetScreenWidth(), CHAT_BAR_HEIGHT, WHITE);
 
+    string tomoMessage = "";
+    Color tomoColor = DARKBLUE;
+
     string infoText = "";
     Color infoColor = Color{198, 120, 221, 255};
 
@@ -554,6 +557,13 @@ int main(int argc, char *argv[]) {
       infoText = "Current File: " + currentFile;
     }
 
+    if (numOfNotifs > 0) 
+      tomoMessage = "You Have A Message From Tomo!";
+    else
+      tomoMessage = "No Current Messages From Tomo...";
+
+    // Draw Status Bar Text
+
     DrawTextEx(mainFont, infoText.c_str(),
                {PADDING / 2.0f,
                 (float)GetScreenHeight() - STATUS_BAR_HEIGHT / 2.0f - 15},
@@ -566,6 +576,20 @@ int main(int argc, char *argv[]) {
                         .x,
                 (float)GetScreenHeight() - STATUS_BAR_HEIGHT / 2.0f - 15},
                FONT_SIZE, FONT_SPACING, statusColor);
+
+    // Draw Chat Bar Text
+    
+    DrawTextEx(mainFont, tomoMessage.c_str(), 
+                {PADDING/2.0f,  CHAT_BAR_HEIGHT/2.0f-15}, FONT_SIZE, 
+                FONT_SPACING, tomoColor);
+    
+    DrawTextEx(mainFont, to_string(numOfNotifs).c_str(),
+                {GetScreenWidth() - PADDING/2.0f-
+                  MeasureTextEx(mainFont, to_string(numOfNotifs).c_str(),
+                  FONT_SIZE, FONT_SPACING).x, 
+                  CHAT_BAR_HEIGHT/2.0f-15}, FONT_SIZE,
+                  FONT_SPACING, tomoColor);
+    
 
     EndDrawing();
   }
