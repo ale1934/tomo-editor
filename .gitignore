@@ -1,0 +1,8 @@
+# Local relay state (poll cursors, outstanding request ids) — per machine.
+relay/.tomo_cursor
+relay/.tomo_pending
+relay/.tomo_agent_cursor
+# Relay message store when running the server from the repo root.
+relay-data/
+# AI follow-up history.
+ai/.tomo_history.json

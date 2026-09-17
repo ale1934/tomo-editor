@@ -6,6 +6,7 @@
 
 #include "highlight.h"
 #include "ai_bridge.h"
+#include "relay_bridge.h"
 #include <filesystem>
 #include <fstream>
 #include <raylib.h>
@@ -469,6 +470,68 @@ int main(int argc, char *argv[]) {
     if (IsKeyPressed(KEY_ESCAPE) && currentMode == SEARCH) {
       currentMode = EDIT;
       currentSearch = "";
+    }
+
+    // Ask Tomo via the relay (Ctrl+T): sends the current buffer +
+    // instruction to your Tomo agent. This is asynchronous -- Tomo checks
+    // the relay on a schedule, so press F4 a little later for the reply.
+    if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) &&
+        IsKeyPressed(KEY_T)) {
+      if (!RelayConfigured()) {
+        DisplayError("relay not configured "
+                     "(set TOMO_RELAY_URL and TOMO_RELAY_SECRET)");
+      } else {
+        string instruction = FileInput("Ask Tomo", mainFont);
+        if (!instruction.empty()) {
+          RelaySendResult sent =
+              RelayAsk(instruction, currentFile, curLine, curLetter, document);
+          if (!sent.ok) {
+            DisplayError(sent.error);
+          } else {
+            DisplayInfo("sent to Tomo (press F4 for the reply)");
+          }
+        }
+      }
+    }
+
+    // Check for Tomo's reply (F4): applies the returned edit if there is one.
+    if (IsKeyPressed(KEY_F4)) {
+      if (!RelayConfigured()) {
+        DisplayError("relay not configured "
+                     "(set TOMO_RELAY_URL and TOMO_RELAY_SECRET)");
+      } else {
+        RelayPollResult reply = RelayCheck();
+        if (!reply.ok) {
+          DisplayError(reply.error);
+        } else if (!reply.hasReply) {
+          DisplayInfo("no reply from Tomo yet");
+        } else {
+          if (reply.hasEdit) {
+            document.clear();
+            istringstream codeStream(reply.newCode);
+            string line;
+            while (getline(codeStream, line)) {
+              if (!line.empty() && line.back() == '\r')
+                line.pop_back();
+              document.push_back(line);
+            }
+            if (document.empty())
+              document.push_back("");
+            curLine = 0;
+            curLetter = 0;
+            scrollOffset = 0;
+            ClampScroll();
+            syntax = SyntaxForFile(currentFile);
+          }
+          string msg = reply.message.empty() ? "Tomo replied"
+                                             : reply.message;
+          if (reply.count > 1)
+            msg += " (" + to_string(reply.count - 1) + " more, press F4)";
+          else if (reply.hasEdit)
+            msg += " (Ctrl+S to save)";
+          DisplayInfo(msg);
+        }
+      }
     }
 
     // cout << "Current Letter: " << curLetter << endl;
