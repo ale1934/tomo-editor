@@ -5,9 +5,11 @@
 #define TAB_SPACING 4
 
 #include "highlight.h"
+#include "ai_bridge.h"
 #include <filesystem>
 #include <fstream>
 #include <raylib.h>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -421,6 +423,47 @@ int main(int argc, char *argv[]) {
     if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_U)) {
       document[curLine].clear();
       curLetter = 0;
+    }
+
+    // Ask AI (Ctrl+K): prompt for an instruction, send the current buffer
+    // to the AI helper, and apply the returned edit if there is one.
+    if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) &&
+        IsKeyPressed(KEY_K)) {
+      string instruction = FileInput("Ask AI", mainFont);
+      if (!instruction.empty()) {
+        // Show feedback before blocking on the API call.
+        BeginDrawing();
+        ClearBackground(BLACK);
+        DrawTextEx(mainFont, "Thinking...",
+                   {PADDING / 2.0f, (float)GetScreenHeight() / 2.0f}, FONT_SIZE,
+                   FONT_SPACING, BLUE);
+        EndDrawing();
+
+        AiResult ai =
+            AiAsk(instruction, currentFile, curLine, curLetter, document);
+        if (!ai.ok) {
+          DisplayError(ai.error);
+        } else if (ai.hasEdit) {
+          document.clear();
+          istringstream codeStream(ai.newCode);
+          string line;
+          while (getline(codeStream, line)) {
+            if (!line.empty() && line.back() == '\r')
+              line.pop_back();
+            document.push_back(line);
+          }
+          if (document.empty())
+            document.push_back("");
+          curLine = 0;
+          curLetter = 0;
+          scrollOffset = 0;
+          ClampScroll();
+          syntax = SyntaxForFile(currentFile);
+          DisplayInfo("AI edit applied (Ctrl+S to save)");
+        } else {
+          DisplayInfo(ai.message);
+        }
+      }
     }
 
     if (IsKeyPressed(KEY_ESCAPE) && currentMode == SEARCH) {
